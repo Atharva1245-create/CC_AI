@@ -1,0 +1,6 @@
+{
+  "name": "CC AI - Explainable AI System",
+  "description": "CC AI Reasoning Engine with sentence-level grounding verification, PII shielding, and interactive flowcharts.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
