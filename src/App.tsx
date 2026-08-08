@@ -9,6 +9,7 @@ import { AuthModal } from './components/AuthModal';
 import { SavedSessionsModal } from './components/SavedSessionsModal';
 import { Message, KnowledgeArticle, PipelineLog, UserProfile, ContextContribution, SavedSession } from './types';
 import { DEFAULT_KNOWLEDGE_ARTICLES } from './data/knowledgeBase';
+import { processQueryClientSide } from './utils/clientQueryEngine';
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -55,13 +56,21 @@ export default function App() {
   // Fetch latest Knowledge Base from backend on mount
   useEffect(() => {
     fetch('/api/knowledge-base')
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error('Backend route not available');
+        return res.json();
+      })
       .then(data => {
         if (data.articles && Array.isArray(data.articles)) {
           setKnowledgeArticles(data.articles);
+        } else {
+          setKnowledgeArticles(DEFAULT_KNOWLEDGE_ARTICLES);
         }
       })
-      .catch(err => console.error('Failed to load KB from backend:', err));
+      .catch(err => {
+        console.warn('Backend KB route unavailable (e.g. Netlify deployment). Loading default knowledge base:', err);
+        setKnowledgeArticles(DEFAULT_KNOWLEDGE_ARTICLES);
+      });
   }, []);
 
   // Latest pipeline logs and context ledger from the most recent message
@@ -164,55 +173,46 @@ export default function App() {
     setKnowledgeArticles([]);
 
     try {
-      const res = await fetch('/api/chat/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: promptText,
-          domainFilter: activeDomain,
-          customKnowledge
-        })
-      });
+      let data: any = null;
 
-      if (!res.ok) {
-        const contentType = res.headers.get('content-type') || '';
-        let errorDetail = '';
-        if (contentType.includes('application/json')) {
-          const errJson = await res.json().catch(() => ({}));
-          errorDetail = errJson.error || errJson.message || `HTTP ${res.status}`;
+      try {
+        const res = await fetch('/api/chat/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: promptText,
+            domainFilter: activeDomain,
+            customKnowledge
+          })
+        });
+
+        if (res.ok) {
+          data = await res.json();
         } else {
-          errorDetail = `HTTP ${res.status} ${res.statusText} - The backend server route (/api/chat/query) was not reached. If deployed on Netlify, static hosting cannot execute the Node.js Express server (server.ts).`;
+          console.warn(`Express backend returned HTTP ${res.status}. Switching to client-side CC AI reasoning engine...`);
         }
-        throw new Error(errorDetail);
+      } catch (networkErr) {
+        console.warn('Backend server route not reachable (e.g. Netlify static hosting). Running client-side CC AI reasoning engine...');
       }
 
-      const data = await res.json();
-      if (data.message) {
+      // If backend server responded with valid data
+      if (data && data.message) {
         setMessages(prev => [...prev, data.message]);
-      }
-      if (data.updatedKnowledgeBase && Array.isArray(data.updatedKnowledgeBase)) {
-        setKnowledgeArticles(data.updatedKnowledgeBase);
-      }
-      if (!data.message) {
-        throw new Error(data.error || 'Unknown server response');
+        if (data.updatedKnowledgeBase && Array.isArray(data.updatedKnowledgeBase)) {
+          setKnowledgeArticles(data.updatedKnowledgeBase);
+        }
+      } else {
+        // Fallback: Run seamless client-side CC AI reasoning pipeline
+        const clientResult = await processQueryClientSide(promptText, activeDomain, customKnowledge, DEFAULT_KNOWLEDGE_ARTICLES);
+        setMessages(prev => [...prev, clientResult.message]);
+        setKnowledgeArticles(clientResult.updatedKnowledgeBase);
       }
     } catch (err: any) {
-      console.error('Error querying CC AI backend:', err);
-      const isNetlifyOrStatic = err?.message?.includes('HTML') || err?.message?.includes('HTTP 404') || err?.message?.includes('server route');
-      
+      console.error('Error processing query:', err);
       const errorMsg: Message = {
         id: `err-${Date.now()}`,
         role: 'assistant',
-        text: isNetlifyOrStatic 
-          ? `⚠️ **Backend Connection Failure (Netlify Static Hosting)**\n\n` +
-            `The application was unable to reach the Node.js Express backend server (\`/api/chat/query\`).\n\n` +
-            `**Why this happened on Netlify:**\n` +
-            `Netlify by default hosts standard static React builds (\`dist/\`) and does not run the backend Node.js server (\`server.ts\`) or process server-side API keys (\`GEMINI_API_KEY\`).\n\n` +
-            `**How to fix on Netlify / Cloud Deployment:**\n` +
-            `1. **Option A (Full-Stack Deployment - Recommended)**: Deploy to a Node.js full-stack container host like **Cloud Run**, **Render**, **Railway**, or **Heroku** using \`node dist/server.cjs\` (or \`npm start\`).\n` +
-            `2. **Option B (Netlify Proxy / Redirect)**: If hosting frontend on Netlify, set up a \`netlify.toml\` redirect rule proxying \`/api/*\` to your hosted backend URL.\n` +
-            `3. **Environment Variable**: Ensure \`GEMINI_API_KEY\` is set in your deployment environment settings.`
-          : `An error occurred while connecting to the CC AI engine: ${err.message || 'Please verify network connectivity and backend API key.'}`,
+        text: `An error occurred while processing your query with CC AI engine: ${err.message || 'Please check input.'}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         overallGroundingScore: 0
       };
