@@ -174,6 +174,18 @@ export default function App() {
         })
       });
 
+      if (!res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        let errorDetail = '';
+        if (contentType.includes('application/json')) {
+          const errJson = await res.json().catch(() => ({}));
+          errorDetail = errJson.error || errJson.message || `HTTP ${res.status}`;
+        } else {
+          errorDetail = `HTTP ${res.status} ${res.statusText} - The backend server route (/api/chat/query) was not reached. If deployed on Netlify, static hosting cannot execute the Node.js Express server (server.ts).`;
+        }
+        throw new Error(errorDetail);
+      }
+
       const data = await res.json();
       if (data.message) {
         setMessages(prev => [...prev, data.message]);
@@ -182,15 +194,25 @@ export default function App() {
         setKnowledgeArticles(data.updatedKnowledgeBase);
       }
       if (!data.message) {
-        throw new Error(data.error || 'Unknown error occurred');
+        throw new Error(data.error || 'Unknown server response');
       }
     } catch (err: any) {
       console.error('Error querying CC AI backend:', err);
-      // Fallback message if network or server error
+      const isNetlifyOrStatic = err?.message?.includes('HTML') || err?.message?.includes('HTTP 404') || err?.message?.includes('server route');
+      
       const errorMsg: Message = {
         id: `err-${Date.now()}`,
         role: 'assistant',
-        text: 'An error occurred while connecting to the CC AI engine. Please verify network connectivity.',
+        text: isNetlifyOrStatic 
+          ? `⚠️ **Backend Connection Failure (Netlify Static Hosting)**\n\n` +
+            `The application was unable to reach the Node.js Express backend server (\`/api/chat/query\`).\n\n` +
+            `**Why this happened on Netlify:**\n` +
+            `Netlify by default hosts standard static React builds (\`dist/\`) and does not run the backend Node.js server (\`server.ts\`) or process server-side API keys (\`GEMINI_API_KEY\`).\n\n` +
+            `**How to fix on Netlify / Cloud Deployment:**\n` +
+            `1. **Option A (Full-Stack Deployment - Recommended)**: Deploy to a Node.js full-stack container host like **Cloud Run**, **Render**, **Railway**, or **Heroku** using \`node dist/server.cjs\` (or \`npm start\`).\n` +
+            `2. **Option B (Netlify Proxy / Redirect)**: If hosting frontend on Netlify, set up a \`netlify.toml\` redirect rule proxying \`/api/*\` to your hosted backend URL.\n` +
+            `3. **Environment Variable**: Ensure \`GEMINI_API_KEY\` is set in your deployment environment settings.`
+          : `An error occurred while connecting to the CC AI engine: ${err.message || 'Please verify network connectivity and backend API key.'}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         overallGroundingScore: 0
       };

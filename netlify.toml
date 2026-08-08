@@ -1,0 +1,12 @@
+# Netlify Configuration File
+# Note: This app requires a full-stack Node.js server (server.ts) to execute AI processing via Gemini API.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Single Page Application (SPA) redirect rule
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
